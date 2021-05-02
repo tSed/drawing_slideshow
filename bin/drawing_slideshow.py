@@ -6,14 +6,45 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from random import choices
 
-from PyQt6.QtWidgets import QWidget, QApplication, QVBoxLayout, QMainWindow
+from PyQt6.QtWidgets import QWidget, QApplication, QStackedLayout, QMainWindow
 from PyQt6.QtGui import QFont, QPainter, QPainterPath, QPainterPathStroker, QColor
+from PyQt6.QtGui import QImageReader, QImage
 from PyQt6.QtCore import Qt, QRect, QRectF, QTimer, QPoint, QPointF, QSize
 
 
 OutlineFormat = namedtuple('OutlineFormat', ('color', 'width'))
 
 OSDFormat = namedtuple('OSDFormat', ('font', 'color', 'outline', 'alignment'))
+
+
+class ViewerWidget(QWidget):
+    def __init__(self, get_image, bg_color=Qt.GlobalColor.black, geometry=None, parent=None):
+        super(ViewerWidget, self).__init__(geometry=geometry, parent=parent)
+
+        if not geometry:
+            size = parent.size() if parent else self.size()
+            geometry = QRect(QPoint(0, 0), size)
+
+        self.get_image = get_image
+        self.bg_color = bg_color
+
+        self.setGeometry(geometry)
+
+    def paintEvent(self, e=None):
+        self.setGeometry(self.parentWidget().frameGeometry())
+        qp = QPainter();
+        qp.begin(self)
+        self.draw(qp)
+        qp.end()
+
+    def draw(self, qp):
+        qp.setPen(self.bg_color)
+        qp.setBrush(self.bg_color)
+        qp.drawRect(self.geometry())
+        image = self.get_image(self.size())
+
+        pos = QPoint((self.width() - image.width()) // 2, (self.height() - image.height()) // 2)
+        qp.drawImage(QRect(pos, image.size()), image)
 
 
 class OSDWidget(QWidget):
@@ -113,20 +144,20 @@ class OSDWidget(QWidget):
         qp.setBrush(self._format.color)
         qp.drawPath(osd)
 
-        qp.setBrush(Qt.BrushStyle.NoBrush)
-        qp.setPen(QColor('#ff0000'))
-        qp.drawRect(QRect(0, 0, self.width(), self.height()))
+        #qp.setBrush(Qt.BrushStyle.NoBrush)
+        #qp.setPen(QColor('#ff0000'))
+        #qp.drawRect(QRect(0, 0, self.width(), self.height()))
 
-        qp.setPen(QColor('#00ff00'))
-        qp.drawLine(QPointF(0, translation.y()),
-                    QPointF(self.width(), translation.y()))
+        #qp.setPen(QColor('#00ff00'))
+        #qp.drawLine(QPointF(0, translation.y()),
+        #            QPointF(self.width(), translation.y()))
 
-        osd_bounds = osd.boundingRect()
-        qp.setPen(QColor('#00ffff'))
-        qp.drawRect(QRectF(translation.x(),
-                           translation.y() - osd_bounds.height(),
-                           osd_bounds.width(),
-                           osd_bounds.height()))
+        #osd_bounds = osd.boundingRect()
+        #qp.setPen(QColor('#00ffff'))
+        #qp.drawRect(QRectF(translation.x(),
+        #                   translation.y() - osd_bounds.height(),
+        #                   osd_bounds.width(),
+        #                   osd_bounds.height()))
 
 
 class TimerWidget(QWidget):
@@ -151,48 +182,89 @@ class TimerWidget(QWidget):
 
 
 class Window(QWidget):
-    def __init__(self, parent=None):
-        super(Window, self).__init__(parent=parent)
-        self.init_UI(parent)
 
-    def init_UI(self, parent=None):
-        self.delays = choices(range(1, 5), k=1)
+    IMAGE_FORMATS = ('bmp', 'gif', 'jpg', 'jpeg', 'png', 'pbm', 'pgm', 'ppm', 'xbm', 'xpm')
+
+    DELAY = 3   # 3s
+    COUNT = 10
+
+    def __init__(self, image_dir, parent=None):
+        super(Window, self).__init__(parent=parent)
+        self.init_data(image_dir)
+        self.init_ui(parent)
+
+    def init_data(self, image_dir):
+        images = []
+        for r, _, fs in os.walk(image_dir):
+            images.extend([os.path.join(r, f) for f in fs
+                           if f.rsplit('.', 1)[-1].lower() in self.IMAGE_FORMATS])
+        self.images = choices(images, k=self.COUNT)
+        self.image = None
+        self.image_path = None
+
+        for p in self.images:
+            print(p)
+
+        self.delays = [self.DELAY + i for i in range(len(self.images))]
         print(self.delays)
         self.step = 0
 
-        self.setGeometry(QRect(QPoint(0, 0), self.screen().size()))
+    def get_image(self, size):
+        path = self.images[self.step-1]
+        if self.image_path != path:
+            self.image_path = path
+            reader = QImageReader(path)
+            reader.setScaledSize(reader.size().scaled(size, Qt.AspectRatioMode.KeepAspectRatio))
+            self.image = reader.read()
+
+        return self.image
+
+    def init_ui(self, parent=None):
+        geometry = QRect(QPoint(0,0), self.screen().size())
+
+        print(f'frameGeometry:{geometry}')
+        self.setGeometry(geometry)
 
         self.widgets = {}
-        self.widgets['timer'] = TimerWidget(100, self.format_time, parent=self)
-        self.widgets['timer'].setGeometry(500, 400, 200, 50)
+        timer_widget = TimerWidget(100, self.format_time, parent=self)
+        timer_widget.setGeometry(500, 400, 200, 50)
 
-        font =QFont()
+        font = QFont()
         font.setPixelSize(30)
         #font.setPointSize(24)
-        self.widgets['osd'] = OSDWidget(self.format_time,
-                                        OSDFormat(font,
-                                                  Qt.GlobalColor.yellow,
-                                                  OutlineFormat(QColor("#202020"), 5),
-                                                  0
-                                                  #| Qt.Alignment.AlignAbsolute
-                                                  #| Qt.Alignment.AlignCenter
-                                                  #| Qt.Alignment.AlignHCenter
-                                                  #| Qt.Alignment.AlignLeft
-                                                  | Qt.Alignment.AlignRight
-                                                  #| Qt.Alignment.AlignVCenter
-                                                  #| Qt.Alignment.AlignBaseline
-                                                  #| Qt.Alignment.AlignTop
-                                                  | Qt.Alignment.AlignBottom
-                                                 ),
-                                        QPoint(self.width() - 220, 20),
-                                        QSize(200, 80),
-                                        True,
-                                        self)
+        osd_widget = OSDWidget(self.format_time,
+                               OSDFormat(font,
+                                         Qt.GlobalColor.yellow,
+                                         OutlineFormat(QColor("#303030"), 5),
+                                         0
+                                         #| Qt.Alignment.AlignAbsolute
+                                         #| Qt.Alignment.AlignCenter
+                                         | Qt.Alignment.AlignHCenter
+                                         #| Qt.Alignment.AlignLeft
+                                         #| Qt.Alignment.AlignRight
+                                         #| Qt.Alignment.AlignVCenter
+                                         #| Qt.Alignment.AlignBaseline
+                                         | Qt.Alignment.AlignTop
+                                         #| Qt.Alignment.AlignBottom
+                                        ),
+                               QPoint(geometry.width() - 220, 20),
+                               QSize(200, 80),
+                               True,
+                               self)
+
+        view_widget = ViewerWidget(self.get_image, geometry=geometry, parent=self)
+
+        self.widgets['osd'] = osd_widget
+        self.widgets['timer'] = timer_widget
+        self.widgets['view'] = view_widget
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.start)
 
-        layout = QVBoxLayout()
+        layout = QStackedLayout()
+        layout.setStackingMode(layout.StackingMode.StackAll)
+        layout.addWidget(self.widgets['osd'])
+        layout.addWidget(self.widgets['view'])
         layout.addWidget(self.widgets['timer'])
         self.setLayout(layout)
 
@@ -209,10 +281,11 @@ class Window(QWidget):
             sys.exit()
 
         self.timer.start(self.delays[self.step] * 1000)
-        if self.step % 2 == 0:
-            self.widgets['timer'].start()
-        else:
-            self.widgets['timer'].stop()
+        self.widgets['timer'].start()
+        #if self.step % 2 == 0:
+        #    self.widgets['timer'].start()
+        #else:
+        #    self.widgets['timer'].stop()
 
         self.step += 1
 
@@ -223,6 +296,7 @@ class Window(QWidget):
         qp.end()
 
     def draw(self, qp):
+        return
         qp.setBrush(Qt.GlobalColor.blue)
         qp.drawRect(self.geometry())
 
@@ -235,7 +309,7 @@ def main():
                      Qt.WindowFlags.MaximizeUsingFullscreenGeometryHint |
                      Qt.WindowFlags.FramelessWindowHint)
     w.setGeometry(QRect(QPoint(0, 0), w.screen().size()))
-    w.setCentralWidget(Window(parent=w))
+    w.setCentralWidget(Window(sys.argv[1], parent=w))
     w.showFullScreen()
     w.setWindowTitle(os.path.basename(__file__))
     app.exec()
