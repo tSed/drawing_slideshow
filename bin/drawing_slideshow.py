@@ -1,10 +1,11 @@
-""" PyQt6 sample program: Drawing timer.
+""" PyQt6 program: Drawing slideshow.
 
 """
 
 import sys
 import os
 import signal
+import argparse
 
 from collections import namedtuple
 
@@ -19,13 +20,24 @@ from PyQt6.QtCore import Qt, QRect, QTimer, QPoint, QPointF, QSize
 from Xlib.display import Display
 
 
+_DEFAULT_START_DELAY = 5 # 5s
+_DEFAULT_INTERVAL_DELAY = 15 # 15s
+
+_IMAGE_FORMATS = ('bmp', 'gif', 'jpg', 'jpeg', 'png', 'pbm', 'pgm', 'ppm', 'xbm', 'xpm')
+
+
 OutlineFormat = namedtuple('OutlineFormat', ('color', 'width'))
 """ Outline format class
 
 """
 
 OSDFormat = namedtuple('OSDFormat', ('font', 'color', 'outline', 'alignment'))
-"""OSD format class
+""" OSD format class
+
+"""
+
+Pose = namedtuple('Pose', ('image', 'duration'))
+""" Pose class
 
 """
 
@@ -68,8 +80,10 @@ class ViewerWidget(QWidget):
         qpainter.drawRect(self.geometry())
         image = self.get_image(self.size())
 
-        pos = QPoint((self.width() - image.width()) // 2, (self.height() - image.height()) // 2)
-        qpainter.drawImage(QRect(pos, image.size()), image)
+        if image:
+            pos = QPoint((self.width() - image.width()) // 2,
+                         (self.height() - image.height()) // 2)
+            qpainter.drawImage(QRect(pos, image.size()), image)
 
     def setWindowTitle(self, title):
         """ Set window title overload
@@ -283,34 +297,15 @@ class Window(QWidget):
 
     """
 
-    IMAGE_FORMATS = ('bmp', 'gif', 'jpg', 'jpeg', 'png', 'pbm', 'pgm', 'ppm', 'xbm', 'xpm')
-
-    DELAY = 3   # 3s
-    COUNT = 10
-
-    def __init__(self, image_dir, parent=None):
+    def __init__(self, images, parent=None):
         super().__init__(parent=parent)
         self.image = None
         self.image_path = None
-        self.init_data(image_dir)
-        self.init_ui()
 
-    def init_data(self, image_dir):
-        """ Initialize internal data
-
-        :param image_dir: Path of the root image directory to be displayed
-
-        """
-        images = []
-        for root, _, files in os.walk(image_dir):
-            images.extend([os.path.join(root, fname) for fname in files
-                           if fname.rsplit('.', 1)[-1].lower() in self.IMAGE_FORMATS])
-        self.images = choices_unique(images, k=self.COUNT)
-        self.image = None
-        self.image_path = None
-
-        self.delays = [self.DELAY * 1000 for _ in self.images]
+        self.images = images
         self.step = 0
+
+        self.init_ui()
 
     def get_image(self, size):
         """ Return the QImage object, scaled to the given size keeping the original
@@ -319,12 +314,16 @@ class Window(QWidget):
         :param size: The widget size
 
         """
-        path = self.images[self.step-1]
+        path = self.images[self.step - 1].image
         if self.image_path != path:
             self.image_path = path
-            reader = QImageReader(path)
-            reader.setScaledSize(reader.size().scaled(size, Qt.AspectRatioMode.KeepAspectRatio))
-            self.image = reader.read()
+            if path is not None:
+                reader = QImageReader(path)
+                reader.setScaledSize(reader.size().scaled(size,
+                                                          Qt.AspectRatioMode.KeepAspectRatio))
+                self.image = reader.read()
+            else:
+                self.image = None
 
         return self.image
 
@@ -405,16 +404,21 @@ class Window(QWidget):
         """ Start the image timer
 
         """
-        if self.step >= len(self.delays):
+        if self.step >= len(self.images):
             QApplication.instance().quit()
             return
 
-        self.timer.start(self.delays[self.step])
+        self.timer.start(self.images[self.step].duration)
         self.widgets['timer'].start()
 
-        title = f"{self.step+1:{len(str(self.COUNT))}d}/{len(self.delays)}"
-        title += f" - {os.path.basename(self.images[self.step])}"
-        print(title)
+        title = "Drawing timer"
+        if self.images[self.step].image:
+            image_count = len(self.images) // 2
+            image_index = (self.step + 1) // 2
+            title += f" - {image_index:{len(str(image_count))}d}/{image_count}"
+            title += f" - {os.path.basename(self.images[self.step].image)}"
+            print(title)
+
         self.setWindowTitle(title)
 
         self.step += 1
@@ -424,10 +428,10 @@ class Window(QWidget):
 
         """
         if self.timer.isActive():
-            self.delays[self.step - 1] = self.timer.remainingTime()
+            self.images[self.step - 1] = Pose(self.image_path, self.timer.remainingTime())
             self.timer.stop()
         else:
-            self.timer.start(self.delays[self.step - 1])
+            self.timer.start(self.images[self.step - 1].duration)
 
     # pylint: disable=invalid-name
     def setWindowTitle(self, title):
@@ -518,6 +522,48 @@ class ScreenSaver:
 
 
 def __main__():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('image_dir',
+                        help="Image galery root path.")
+
+    parser.add_argument('--pose', '-p', dest='poses',
+                        action='append', type=int,
+                        metavar=('DURATION', 'COUNT'), nargs=2,
+                        help='Slideshow pose parameter specifying the DURATION (in seconds) '
+                             'for displaying COUNT images. Can appear several times; '
+                             'in such case, the pose duration order is kept.')
+
+    parser.add_argument('--interlude', '-i', type=int, default=_DEFAULT_INTERVAL_DELAY,
+                        help='Interlude duration (in seconds) between tow images.')
+    parser.add_argument('--start-delay', '-s', type=int, default=5,
+                        help='Delay (in seconds) before the slideshow starts.')
+
+    parsed = parser.parse_args()
+
+    total_poses = sum(pose[-1] for pose in parsed.poses)
+
+    images = []
+    for root, _, files in os.walk(parsed.image_dir):
+        images.extend([os.path.join(root, fname) for fname in files
+                       if fname.rsplit('.', 1)[-1].lower() in _IMAGE_FORMATS])
+    images = choices_unique(images, k=total_poses)
+
+    delays = []
+    for duration, count in parsed.poses:
+        delays.extend([duration * 1000 for _ in range(count)])
+
+    images = [Pose(image, delay) for image, delay in zip(images, delays)]
+
+    interludes = [Pose(None, parsed.interlude * 1000) for _ in range(len(images) - 1)]
+
+    poses = images + interludes
+    poses[0::2] = images
+    poses[1::2] = interludes
+
+    if parsed.start_delay:
+        poses.insert(0, Pose(None, parsed.start_delay * 1000))
+
     app = QApplication([])
 
     screensaver = ScreenSaver(enable=False)
@@ -536,7 +582,7 @@ def __main__():
                           Qt.WindowFlags.MaximizeUsingFullscreenGeometryHint |
                           Qt.WindowFlags.FramelessWindowHint)
     window.setGeometry(QRect(QPoint(0, 0), window.screen().size()))
-    window.setCentralWidget(Window(sys.argv[1], parent=window))
+    window.setCentralWidget(Window(poses, parent=window))
     window.showFullScreen()
 
     return app.exec()
