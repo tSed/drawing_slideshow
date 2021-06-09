@@ -560,7 +560,8 @@ def __main__():
 
     images = [Pose(image, delay) for image, delay in zip(images, delays)]
 
-    interludes = [Pose(None, parsed.interlude * 1000) for _ in range(len(images) - 1)]
+    interlude = Pose(None, parsed.interlude * 1000)
+    interludes = [interlude for _ in range(len(images) - 1)]
 
     poses = images + interludes
     poses[0::2] = images
