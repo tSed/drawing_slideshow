@@ -305,6 +305,9 @@ class Window(QWidget):
         self.images = images
         self.step = 0
 
+        self.image_count = len([pose for pose in images if pose.image is not None])
+        self.image_displayed = 0
+
         self.init_ui()
 
     def get_image(self, size):
@@ -411,11 +414,13 @@ class Window(QWidget):
         self.timer.start(self.images[self.step].duration)
         self.widgets['timer'].start()
 
-        title = "Drawing timer"
         if self.images[self.step].image:
-            image_count = len(self.images) // 2
-            image_index = (self.step + 1) // 2
-            title += f" - {image_index:{len(str(image_count))}d}/{image_count}"
+            self.image_displayed += 1
+
+        title = "Drawing timer"
+        title += f" - {self.image_displayed:{len(str(self.image_count))}d}/{self.image_count}"
+
+        if self.images[self.step].image:
             title += f" - {os.path.basename(self.images[self.step].image)}"
             print(title)
 
