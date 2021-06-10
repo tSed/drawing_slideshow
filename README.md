@@ -1,2 +1,2 @@
 # drawing_slideshow
-Drawing slidesho
+Drawing slideshow PyQT6-based application
